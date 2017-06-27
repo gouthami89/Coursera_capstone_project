@@ -1,0 +1,499 @@
+---
+title: "Milestone report 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+# Introduction
+
+This document reports on the following:
+
+1. Characteristics and summary statistics of the data sets. 
+2. Interesting findings.
+3. Plans for prediction algorithm and shiny app. 
+
+# Data sets
+
+We consider files of the english language
+
+```{r data, echo=TRUE}
+list.files("en_US")
+```
+
+```{r data2, echo=FALSE, eval=FALSE}
+list.files("de_DE")
+list.files("fi_F1")
+list.files("ru_RU")
+```
+
+# Data pre-processing
+
+We perform data pre-processing to inspect most common words, most common ngrams etc. 
+
+```{r prep_data, echo=TRUE}
+
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(ggplot2)
+library(SnowballC)
+library(biclust)
+library(cluster)
+library(igraph)
+library(fpc)
+library(caret)
+library(openNLP)
+library(NLP)
+library(ngram)
+library(qdap)
+library(dynamicTreeCut)
+set.seed(1234)
+```
+
+## Reading a small sample
+
+1000 lines from US blogs, news and twits are loaded intoa variable "samples". 
+```{r prep_data2, echo=TRUE, eval=TRUE}
+
+blogs <- readLines("en_US/en_US.blogs.txt")
+news <- readLines("en_US/en_US.news.txt")
+twits <- readLines("en_US/en_US.twitter.txt")
+
+samples <- c(sample(blogs, 800000), sample(news, 70000), sample(twits, 200000))
+
+samples <- iconv(samples, "UTF-8", "latin1")
+
+write.table(samples,"text_US.txt",row.names=FALSE,col.names=FALSE,quote=FALSE,append=FALSE)
+```
+
+The "samples" variable containing the text is converted to a Corpus and processed using the "tm" library.
+
+```{r prep_data3, echo=TRUE}
+
+DS <- data.frame(samples)
+docs <- Corpus(DataframeSource(DS))
+
+summary(docs)
+docs <- tm_map(docs, removePunctuation)   
+docs <- tm_map(docs, removeNumbers)   
+docs <- tm_map(docs, content_transformer(tolower)   )
+docs <- tm_map(docs, removeWords, stopwords("english")) 
+docs <- tm_map(docs, stripWhitespace)   
+docs <- tm_map(docs, stemDocument)   
+docs <- tm_map(docs, PlainTextDocument)   
+
+```
+
+## Staging the data
+
+The data is then staged to explore word counts, n-gram counts. 
+
+```{r stage, echo=TRUE}
+dtm <- DocumentTermMatrix(docs)   
+tdm <- TermDocumentMatrix(docs)
+
+inspect(tdm[1:15,1])
+```
+
+## Exploring the data
+
+### Organize terms by their frequency
+
+Firstly, the words in the corpus are arranged by increasing order of the frequency of their occurrence. 
+
+```{r org, echo=TRUE}
+freq <- sort(colSums(as.matrix(dtm)), decreasing=TRUE)
+head(freq, 14)  
+# Removing sparse terms
+dtms <- removeSparseTerms(dtm, 0.1) 
+```
+
+```{r wrdfreq, echo=TRUE}
+table(freq)
+```
+
+A table of "freq" shows that there are many words that occur only once, fewer words that occur more than about 40 times and a very few words that occur more than 90 times.
+
+### Plots of word frequencies
+
+The following plots show us which are the common words
+```{r plot, echo=TRUE}
+wf <- data.frame(word = names(freq), freq=freq)
+p <- ggplot(subset(wf, freq>90 & freq < 300), aes(word, freq))    
+p <- p + geom_bar(stat="identity")   
+p <- p + theme(axis.text.x=element_text(angle=45, hjust=1))   
+p    
+
+wordcloud(names(freq), freq, min.freq=60, scale=c(5, .1), colors=brewer.pal(6, "Dark2"))   
+
+```
+
+
+### Hierarchial Clustering
+
+```{r hierarchy2, echo = TRUE}
+dtmss <- removeSparseTerms(dtms, 0.2)
+
+hc <- hclust(dist(t(dtmss)))
+hcd1 <- as.dendrogram(hc)
+hcd2 <- as.dendrogram(hc)
+
+plot(cut(hcd2, h=90)$lower[[2]], 
+   main="Hierarchial clustering")
+
+```
+
+## n-grams
+
+```{r ngram, echo = TRUE}
+require(RWeka)
+
+OnegramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+tdmn1 <- TermDocumentMatrix(docs, control = list(tokenize = OnegramTokenizer))
+tdmn1 <- removeSparseTerms(tdmn1, 0.75)
+```
+
+Similarly, 2-grams, 3-grams, 4-grams and 5-grams were identified. 
+```{r ngram2, echo =FALSE}
+TwogramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+tdmn2 <- TermDocumentMatrix(docs, control = list(tokenize = TwogramTokenizer))
+tdmn2 <- removeSparseTerms(tdmn2, 0.75)
+
+ThreegramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+tdmn3 <- TermDocumentMatrix(docs, control = list(tokenize = ThreegramTokenizer))
+tdmn3 <- removeSparseTerms(tdmn3, 0.75)
+
+FourgramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 4, max = 4))
+tdmn4 <- TermDocumentMatrix(docs, control = list(tokenize = FourgramTokenizer))
+tdmn4 <- removeSparseTerms(tdmn4, 0.75)
+
+FivegramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 5, max = 5))
+tdmn5 <- TermDocumentMatrix(docs, control = list(tokenize = FivegramTokenizer))
+tdmn5 <- removeSparseTerms(tdmn5, 0.75)
+
+```
+
+### Sorting of the n-grams
+
+The deduced n-grams are sorted by decreasing order of occurrence. n-grams that occurred only once were removed. 
+```{r ngramsort1, echo = FALSE}
+
+tdmn1Matrix <- as.matrix(tdmn1)
+tf1grams <- rowSums(tdmn1Matrix)
+tf1sorted <- sort(tf1grams, decreasing = TRUE)
+tf1noones <- tf1sorted  #[which(tf1sorted != 1)]
+tf1noones <- sort(tf1noones, decreasing = TRUE)
+
+
+tdmn2Matrix <- as.matrix(tdmn2)
+tf2grams <- rowSums(tdmn2Matrix)
+tf2sorted <- sort(tf2grams, decreasing = TRUE)
+tf2noones <- tf2sorted #[which(tf2sorted != 1)]
+tf2noones <- sort(tf2noones, decreasing = TRUE)
+
+
+tdmn3Matrix <- as.matrix(tdmn3)
+tf3grams <- rowSums(tdmn3Matrix)
+tf3sorted <- sort(tf3grams, decreasing = TRUE)
+tf3noones <- tf3sorted #[which(tf3sorted != 1)]
+tf3noones <- sort(tf3noones, decreasing = TRUE)
+
+
+tdmn4Matrix <- as.matrix(tdmn4)
+tf4grams <- rowSums(tdmn4Matrix)
+tf4sorted <- sort(tf4grams, decreasing = TRUE)
+tf4noones <- tf4sorted #[which(tf4sorted != 1)]
+tf4noones <- sort(tf4noones, decreasing = TRUE)
+
+```
+
+```{r ngramsort2, echo = TRUE}
+tdmn5Matrix <- as.matrix(tdmn5)
+tf5grams <- rowSums(tdmn5Matrix)
+tf5sorted <- sort(tf5grams, decreasing = TRUE)
+tf5noones <- tf5sorted #[which(tf5sorted != 1)]
+tf5noones <- sort(tf5noones, decreasing = TRUE)
+
+save(tf1noones, file="1noones.tf")
+save(tf2noones, file="2noones.tf")
+save(tf3noones, file="3noones.tf")
+save(tf4noones, file="4noones.tf")
+save(tf5noones, file="5noones.tf")
+
+head(tf1noones, 5)
+
+
+```
+
+# Creating the prediction model 
+
+Firstly, an index file is set up to recall n-grams in the decreasing order of their frequency.
+```{r model, echo = TRUE}
+load("1noones.tf")
+load("2noones.tf")
+load("3noones.tf")
+load("4noones.tf")
+load("5noones.tf")
+
+len1 <-length(tf1noones)
+
+indexes1Gram <- 1:len1
+len1
+names(indexes1Gram) <- names(tf1noones)
+save(indexes1Gram, file="indexes1Gram.tf") 
+
+```
+
+```{r model1, echo = FALSE}
+len2 <-length(tf2noones)
+
+indexes2Gram <- 1:len2
+names(indexes2Gram) <- names(tf2noones)
+save(indexes2Gram, file="indexes2Gram.tf") 
+
+len3 <-length(tf3noones)
+
+indexes3Gram <- 1:len3
+names(indexes3Gram) <- names(tf3noones)
+save(indexes3Gram, file="indexes3Gram.tf") 
+
+len4 <-length(tf4noones)
+
+indexes4Gram <- 1:len4
+names(indexes4Gram) <- names(tf4noones)
+save(indexes4Gram, file="indexes4Gram.tf") 
+
+len5 <-length(tf5noones)
+
+indexes5Gram <- 1:len5
+names(indexes5Gram) <- names(tf5noones)
+save(indexes5Gram, file="indexes5Gram.tf") 
+```
+
+Next, priors and posteriors are computed by separating n-1-gram and the n-th word from each n-gram . 
+
+```{r model2, echo = FALSE}
+allNames2 <- names(tf2noones)
+freq2Gram <- unname(tf2noones)
+#save(freq2gram, file="freq2Gram.tf")       
+allNamesCollapsed2 <- paste(allNames2, collapse = " ")
+allNamesVector2 <- unlist(strsplit(allNamesCollapsed2, split = " "))
+prior2 <- allNamesVector2[seq.int(1, len2 * 2, 2)]
+post2 <- allNamesVector2[seq.int(2, len2 * 2, 2)]
+
+prior2Ix <- indexes1Gram[prior2]
+post2Ix <- indexes1Gram[post2]
+
+
+allNames3 <- names(tf3noones)
+freq3Gram <- unname(tf3noones)
+#save(freq2gram, file="freq2Gram.tf")       
+allNamesCollapsed3 <- paste(allNames3, collapse = " ")
+allNamesVector3 <- unlist(strsplit(allNamesCollapsed3, split = " "))
+prior3_1 <- allNamesVector3[seq.int(1, len3 * 3, 3)]
+prior3_2 <- allNamesVector3[seq.int(2, len3 * 3, 3)]
+prior3 <- paste(prior3_1, prior3_2, sep = " ")
+post3 <- allNamesVector3[seq.int(3, len3 * 3, 3)]
+
+prior3Ix <- indexes2Gram[prior3]
+post3Ix <- indexes1Gram[post3]
+
+allNames4 <- names(tf4noones)
+freq4Gram <- unname(tf4noones)
+#save(freq2gram, file="freq2Gram.tf")       
+allNamesCollapsed4 <- paste(allNames4, collapse = " ")
+allNamesVector4 <- unlist(strsplit(allNamesCollapsed4, split = " "))
+prior4_1 <- allNamesVector4[seq.int(1, len4 * 4, 4)]
+prior4_2 <- allNamesVector4[seq.int(2, len4 * 4, 4)]
+prior4_3 <- allNamesVector4[seq.int(3, len4 * 4, 4)]
+prior4 <- paste(prior4_1, prior4_2, prior4_3, sep = " ")
+post4 <- allNamesVector4[seq.int(4, len4 * 4, 4)]
+
+prior4Ix <- indexes3Gram[prior4]
+post4Ix <- indexes1Gram[post4]
+
+
+```
+
+
+```{r model3, echo = TRUE}
+allNames5 <- names(tf5noones)
+freq5Gram <- unname(tf5noones)
+save(freq5Gram, file="freq5Gram.tf")       
+allNamesCollapsed5 <- paste(allNames5, collapse = " ")
+allNamesVector5 <- unlist(strsplit(allNamesCollapsed5, split = " "))
+prior5_1 <- allNamesVector5[seq.int(1, len5 * 5, 5)]
+prior5_2 <- allNamesVector5[seq.int(2, len5 * 5, 5)]
+prior5_3 <- allNamesVector5[seq.int(3, len5 * 5, 5)]
+prior5_4 <- allNamesVector5[seq.int(4, len5 * 5, 5)]
+post5 <- allNamesVector5[seq.int(5, len5 * 5, 5)]
+
+prior5 <- paste(prior5_1, prior5_2, prior5_3, prior5_4, sep = " ")
+prior5Ix <- indexes4Gram[prior5]
+post5Ix <- indexes1Gram[post5]
+```
+
+The probability of each word following an n-1-gram is then calculated.
+
+```{r model 4, echo = FALSE}
+
+prob2Gram <- vector(mode = "integer", length = length(freq2Gram))
+for(i in 1:length(indexes2Gram)) 
+  prob2Gram[i] <- (freq2Gram[i] / freq2Gram[prior2Ix[i]])
+names(prob2Gram) <- names(indexes2Gram)
+
+
+prob3Gram <- vector(mode = "integer", length = length(freq3Gram))
+for(i in 1:length(indexes3Gram)) 
+  prob3Gram[i] <- (freq3Gram[i] / freq3Gram[prior3Ix[i]])
+names(prob3Gram) <- names(indexes3Gram)
+
+
+prob4Gram <- vector(mode = "integer", length = length(freq4Gram))
+for(i in 1:length(indexes4Gram)) 
+  prob4Gram[i] <- (freq4Gram[i] / freq4Gram[prior4Ix[i]])
+names(prob4Gram) <- names(indexes4Gram)
+
+```
+
+```{r model 5, echo = TRUE}
+
+prob5Gram <- vector(mode = "integer", length = length(freq5Gram))
+for(i in 1:length(indexes5Gram)) 
+  prob5Gram[i] <- (freq5Gram[i] / freq4Gram[prior5Ix[i]])
+names(prob5Gram) <- names(indexes5Gram)
+```
+Putting everything together in a data table, 
+
+
+```{r data_tab1,echo = FALSE}
+
+library(data.table)
+
+dt2Grams <- data.table(grams = names(indexes2Gram), 
+index = indexes2Gram, 
+frequency = freq2Gram, 
+prior = prior2Ix, 
+posterior = post2Ix, 
+probabilities =prob2Gram)
+
+dt3Grams <- data.table(grams = names(indexes3Gram), 
+index = indexes3Gram, 
+frequency = freq3Gram, 
+prior = prior3Ix, 
+posterior = post3Ix, 
+probabilities =prob3Gram)
+
+dt4Grams <- data.table(grams = names(indexes4Gram), 
+index = indexes4Gram, 
+frequency = freq4Gram, 
+prior = prior4Ix, 
+posterior = post4Ix, 
+probabilities =prob4Gram)
+```
+
+```{r data_tab2,echo = TRUE}
+dt5Grams <- data.table(grams = names(indexes5Gram), 
+index = indexes5Gram, 
+frequency = freq5Gram, 
+prior = prior5Ix, 
+posterior = post5Ix, 
+probabilities = prob5Gram)
+
+# All the searches will be on the prior. Therefore, 
+
+setkey(dt2Grams, prior)
+setkey(dt3Grams, prior)
+setkey(dt4Grams, prior)
+setkey(dt5Grams, prior)
+
+
+save(dt2Grams, file="dt2Gram.dt")
+save(dt3Grams, file="dt3Gram.dt")
+save(dt4Grams, file="dt4Gram.dt")
+save(dt5Grams, file="dt5Gram.dt")
+
+```
+
+The priors are then arranged in the increasing order of their probability, and the corresponding posterior probabilities are arranged in the decreasing order. 
+
+```{r prob_arrange1, echo = FALSE}
+
+dt2SortedPriorProb <- dt2Grams[order(prior, -probabilities)]
+
+dt3SortedPriorProb <- dt3Grams[order(prior, -probabilities)]
+
+dt4SortedPriorProb <- dt4Grams[order(prior, -probabilities)]
+```
+
+```{r prob_arrange2, echo = TRUE}
+dt5SortedPriorProb <- dt5Grams[order(prior, -probabilities)]
+length(dt5SortedPriorProb)
+
+```
+
+```{r pred_model, echo  = TRUE}
+require(stringr)
+run2GramModel <- function(data,n) {
+
+  dt <- dt2SortedPriorProb[word(grams,1) == data]$grams[1:n]
+  return(dt)
+}
+run3GramModel <- function(data,n) {
+
+  dt <- dt3SortedPriorProb[paste(word(grams,1), word(grams,2)) == data]$grams[1:n]
+  return(dt)
+}
+run4GramModel <- function(data,n) {
+
+  dt <- dt2SortedPriorProb[paste(word(grams,1), word(grams,2), word(grams,3)) == data]$grams[1:n]
+  return(dt)
+}
+run5GramModel <- function(data,n) {
+
+  dt <- dt2SortedPriorProb[paste(word(grams,1), word(grams,2), word(grams, 3), word(grams, 4)) == data]$grams[1:n]
+  return(dt)
+}
+
+trimSent <- function(data){
+  l <- sapply(gregexpr("[[:alpha:]]+", data), function(x) sum(x > 0))  
+
+  if (l > 4) {data1 <- paste(word(data,l-1), word(data,l))}
+  else {data1 <- data}
+  return(data1)
+}
+
+runGram <- function(datai,n) {
+
+  data <- trimSent(datai)
+  
+  l <- sapply(gregexpr("[[:alpha:]]+", data), function(x) sum(x > 0))  
+
+  if (l==1) { out <- run2GramModel(data,n)}
+  else if (l==2){ out <- run3GramModel(data,n)}
+  else if (l==3) { out <- run4GramModel(data,n)}
+  else if (l== 4) {out <- run5GramModel(data,n)}
+  else {out <- 0}
+
+  return(out)
+  
+}
+
+data1 <- "i"
+
+runGram(data1,1)
+
+```
+
+# Conclusion
+
+#### 1. Only a small portion of the dataset was used due to the limitations in memory requirements
+
+#### 2. Preliminary data pre-processing and data analyses were performed. Histograms, word clouds and dendograms together give views on the most commonly used words
+
+#### 3. Finally 2-grams and 3-grams were also identified. 
+
+#### 4. The next step is building an n-gram prediction model. Naturally the small data sample considered here will not be efficient enough. Bigger samples have to be used. They will be split into testing and training data sets. 

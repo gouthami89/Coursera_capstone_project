@@ -1,0 +1,179 @@
+---
+title: "Milestone report 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+# Introduction
+
+This document reports on the following:
+
+1. Characteristics and summary statistics of the data sets. 
+2. Interesting findings.
+3. Plans for prediction algorithm and shiny app. 
+
+# Data sets
+
+We consider files of the english language
+
+```{r data, echo=TRUE}
+list.files("en_US")
+```
+
+```{r data2, echo=FALSE, eval=FALSE}
+list.files("de_DE")
+list.files("fi_F1")
+list.files("ru_RU")
+```
+
+# Data pre-processing
+
+We perform data pre-processing to inspect most common words, most common ngrams etc. 
+
+```{r prep_data, echo=TRUE}
+
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(ggplot2)
+library(SnowballC)
+library(biclust)
+library(cluster)
+library(igraph)
+library(fpc)
+library(Rcampdf)
+library(caret)
+library(openNLP)
+library(NLP)
+library(ngram)
+library(qdap)
+library(dynamicTreeCut)
+set.seed(1234)
+```
+
+## Reading a small sample
+
+1000 lines from US blogs, news and twits are loaded intoa variable "samples". 
+```{r prep_data2, echo=TRUE, eval=TRUE}
+
+blogs <- readLines("en_US/en_US.blogs.txt")
+news <- readLines("en_US/en_US.news.txt")
+twits <- readLines("en_US/en_US.twitter.txt")
+
+samples <- c(sample(blogs, 1000), sample(news, 1000), sample(twits, 1000))
+
+samples <- iconv(samples, "UTF-8", "latin1")
+
+setwd("dataset")
+
+write.table(samples,"text_US.txt",row.names=FALSE,col.names=FALSE,quote=FALSE,append=FALSE)
+```
+
+The "samples" variable containing the text is converted to a Corpus and processed using the "tm" library.
+
+```{r prep_data3, echo=TRUE}
+
+cname <- file.path("C:", "Users", "Debanjan", "Dropbox", "COURSERA", "final", "dataset")   
+
+docs <- Corpus(DirSource(cname))   
+summary(docs)
+docs <- tm_map(docs, removePunctuation)   
+docs <- tm_map(docs, removeNumbers)   
+docs <- tm_map(docs, content_transformer(tolower)   )
+docs <- tm_map(docs, removeWords, stopwords("english")) 
+docs <- tm_map(docs, stripWhitespace)   
+docs <- tm_map(docs, stemDocument)   
+docs <- tm_map(docs, PlainTextDocument)   
+
+```
+
+## Staging the data
+
+The data is then staged to explore word counts, n-gram counts. 
+
+```{r stage, echo=TRUE}
+dtm <- DocumentTermMatrix(docs)   
+tdm <- TermDocumentMatrix(docs)
+
+inspect(tdm[1:15,1])
+```
+
+## Exploring the data
+
+### Organize terms by their frequency
+
+Firstly, the words in the corpus are arranged by increasing order of the frequency of their occurrence. 
+
+```{r org, echo=TRUE}
+freq <- sort(colSums(as.matrix(dtm)), decreasing=TRUE)
+head(freq, 14)  
+# Removing sparse terms
+dtms <- removeSparseTerms(dtm, 0.1) 
+```
+
+```{r wrdfreq, echo=TRUE}
+table(freq)
+```
+
+A table of "freq" shows that there are many words that occur only once, fewer words that occur more than about 40 times and a very few words that occur more than 90 times.
+
+### Plots of word frequencies
+
+The following plots show us which are the common words
+```{r plot, echo=TRUE}
+wf <- data.frame(word = names(freq), freq=freq)
+p <- ggplot(subset(wf, freq>90 & freq < 300), aes(word, freq))    
+p <- p + geom_bar(stat="identity")   
+p <- p + theme(axis.text.x=element_text(angle=45, hjust=1))   
+p    
+
+wordcloud(names(freq), freq, min.freq=60, scale=c(5, .1), colors=brewer.pal(6, "Dark2"))   
+
+```
+
+
+### Hierarchial Clustering
+
+```{r hierarchy2, echo = TRUE}
+dtmss <- removeSparseTerms(dtms, 0.2)
+
+hc <- hclust(dist(t(dtmss)))
+hcd1 <- as.dendrogram(hc)
+hcd2 <- as.dendrogram(hc)
+
+plot(cut(hcd2, h=150)$lower[[2]], 
+   main="Hierarchial clustering")
+
+```
+
+## n-grams
+
+```{r ngram, echo = TRUE}
+require(RWeka)
+
+TwogramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+tdmn <- TermDocumentMatrix(docs, control = list(tokenize = TwogramTokenizer))
+tdmn <- removeSparseTerms(tdmn, 0.75)
+inspect(tdmn[501:515,1])
+
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+tdmn2 <- TermDocumentMatrix(docs, control = list(tokenize = TrigramTokenizer))
+tdmn2 <- removeSparseTerms(tdmn2, 0.75)
+inspect(tdmn2[501:515,1])
+```
+
+### Sorting of the n-grams
+
+```{r ngram2, echo = TRUE}
+
+tdmnMatrix <- as.matrix(tdmn)
+tf1grams <- rowSums(tdmnMatrix)
+tf1sorted <- sort(tf1grams, decreasing = TRUE)
+tf1noones <- tf1sorted[which(tf1sorted != 1)]
+
+head(tf1sorted, 10)
+
+```
